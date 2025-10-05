@@ -78,7 +78,7 @@ static std::string metadata_get_str_array_value (GVariant *metadata, const char*
     }
 
     g_free(prop_strv);
-    return result;
+    return std::move(result);
 }
 
 
@@ -594,9 +594,8 @@ private:
     }
 };
 
-std::string encode(std::string_view str) {
-    std::string buffer;
-    buffer.reserve(str.size());
+void encode_into (std::string& buffer, std::string_view str) {
+    buffer.reserve(buffer.size() + str.size());
     for(auto c : str) {
         switch(c) {
             case '&':  buffer.append("&amp;");       break;
@@ -610,7 +609,6 @@ std::string encode(std::string_view str) {
             default:   buffer.append(1, c);          break;
         }
     }
-    return std::move(buffer);
 }
 
 
@@ -675,7 +673,14 @@ struct OutputGenerator : ManagedPlayerHandler {
             display_offset = 0;
             last_src.title = title;
             last_src.artist = artist;
-            update_to_display(title, artist);
+            if (
+                state.metadata.url.starts_with(std::string_view{"https://www.youtube.com"})
+                && artist.ends_with(std::string_view{" - Topic"})
+            ) {
+                update_to_display(title, std::string_view{artist.begin(), artist.end() - 8});
+            } else {
+                update_to_display(title, artist);
+            }
             is_playing = new_is_playing;
             display();
         }
@@ -704,22 +709,22 @@ struct OutputGenerator : ManagedPlayerHandler {
         }
     }
 
-    void update_to_display (const std::string& title, const std::string& artist) {
+    void update_to_display (const std::string& title, std::string_view artist) {
         bool has_seperator = !title.empty() && !artist.empty();
         to_display_utf8_len = 
-        g_utf8_strlen(title.c_str(), -1) + (has_seperator ? 3 : 0) + g_utf8_strlen(artist.c_str(), -1);
+        g_utf8_strlen(title.data(), -1) + (has_seperator ? 3 : 0) + g_utf8_strlen(artist.data(), -1);
+        to_display.clear();
         if (to_display_utf8_len <= max_width) {
             needs_scrolling = false;
-            to_display = 
-            encode(title)
-            + std::string{has_seperator ? " ~ " : ""}
-            + encode(artist);
+            encode_into(to_display, title);
+            if (has_seperator) to_display.append(" ~ ");
+            encode_into(to_display, artist);
         } else {
             needs_scrolling = true;
-            to_display = 
-            title
-            + std::string{has_seperator ? " ~ " : ""}
-            + artist;
+            to_display.clear();
+            to_display.append(title);
+            if (has_seperator) to_display.append(" ~ ");
+            to_display.append(artist);
         }
     }
 
