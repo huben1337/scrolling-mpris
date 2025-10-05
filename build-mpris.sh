@@ -1,0 +1,1 @@
+clang++ -std=gnu++23 -g -O3 $(pkg-config --cflags --libs playerctl) mpris.cpp -o mpris
