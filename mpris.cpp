@@ -515,7 +515,7 @@ struct PlayerManager : GObjectWrapper<PlayerctlPlayerManager>, UniqueOnly {
         managed_players.erase(entry);
         if (was_selected) {
             if (managed_players.empty()) {
-                selected_idx = static_cast<size_t>(-1);
+                selected_idx = NON_IDX;
                 handler->on_empty();
                 return;
             }
@@ -660,10 +660,6 @@ struct OutputGenerator : ManagedPlayerHandler {
         auto& artist = state.metadata.artist;
         auto& art_url = state.metadata.art_url;
         bool new_is_playing = state.playback_status == PLAYERCTL_PLAYBACK_STATUS_PLAYING;
-        if (art_url != last_src.art_url) {
-            // display_print("Cover art url: " + art_url);
-            update_cover_art(art_url);
-        }
         if (last_src.title == title && last_src.artist == artist) {
             if (is_playing != new_is_playing) {
                 is_playing = new_is_playing;
@@ -684,35 +680,56 @@ struct OutputGenerator : ManagedPlayerHandler {
             is_playing = new_is_playing;
             display();
         }
+        if (to_display.empty()) {
+            clear_cover_art();
+        } else {
+            update_cover_art(art_url);
+        }
+    }
+
+    void remove_cover_art_file () noexcept(false) {
+        if (fs::symlink_status(cache_path).type() == fs::file_type::not_found) return;
+        fs::remove(cache_path);
+    }
+
+    void clear_cover_art () {
+        if (last_src.art_url.empty()) return;
+        last_src.art_url.clear();
+        try {
+            remove_cover_art_file();
+        } catch (const std::exception& e) {
+            std::cerr << "Error updating clearing art: " << e.what() << "\n";
+        }
+        refresh_waybar_image();
     }
 
     void update_cover_art (const std::string& art_url) {
+        if (art_url == last_src.art_url) return;
+        if (!art_url.starts_with("file://")) {
+            return clear_cover_art();
+        }
         last_src.art_url = art_url;
         try {
-            if (fs::symlink_status(cache_path).type() != fs::file_type::not_found) {
-                fs::remove_all(cache_path);
-            }
-            if (art_url.starts_with("file://")) {
-                fs::path src_path = art_url.substr(7);
-                fs::create_symlink(src_path, cache_path);
-            } else {
-                // fs::create_symlink("/dev/null", cache_path);
-            }
-
-            // Trigger Waybar signal for module refresh (signal 5)
-            int ret = std::system("pkill -RTMIN+5 waybar");
-            if (ret != 0) {
-                std::cerr << "Failed to send Waybar signal\n";
-            }
+            remove_cover_art_file();
+            fs::create_symlink(art_url.substr(7), cache_path);
         } catch (const std::exception& e) {
             std::cerr << "Error updating cover art: " << e.what() << "\n";
+            return;
+        }
+        refresh_waybar_image();
+    }
+    
+    void refresh_waybar_image () {
+        int ret = std::system("pkill -RTMIN+5 waybar");
+        if (ret != 0) {
+            std::cerr << "Failed to send Waybar signal\n";
         }
     }
 
     void update_to_display (const std::string& title, std::string_view artist) {
         bool has_seperator = !title.empty() && !artist.empty();
         to_display_utf8_len = 
-        g_utf8_strlen(title.data(), -1) + (has_seperator ? 3 : 0) + g_utf8_strlen(artist.data(), -1);
+        g_utf8_strlen(title.data(), title.length()) + (has_seperator ? 3 : 0) + g_utf8_strlen(artist.data(), artist.length());
         to_display.clear();
         if (to_display_utf8_len <= max_width) {
             needs_scrolling = false;
@@ -721,7 +738,6 @@ struct OutputGenerator : ManagedPlayerHandler {
             encode_into(to_display, artist);
         } else {
             needs_scrolling = true;
-            to_display.clear();
             to_display.append(title);
             if (has_seperator) to_display.append(" ~ ");
             to_display.append(artist);
